@@ -1,6 +1,6 @@
 ---
 name: ifood-bex-gifs-tools
-description: Ferramentas de mídia para o time de Comunicação BEX do iFood: converte vídeos em GIF animado, comprime vídeos pesados e converte/comprime imagens para uso em apresentações PowerPoint e Google Slides. Use esta skill sempre que o usuário mencionar GIF, vídeo para apresentação, comprimir vídeo ou imagem, converter JPG para PNG ou PNG para JPG, reduzir tamanho de arquivo de mídia, ou precisar de conteúdo visual otimizado para slides — mesmo que a palavra "BEX" não apareça na solicitação.
+description:Ferramentas de mídia para times do iFood: converte vídeos em GIF animado para apresentações, comprime vídeos e imagens pesadas e converte arquivos JPG para PNG. Use sempre que precisar converter vídeo em GIF, comprimir vídeo ou imagem, reduzir tamanho de arquivo de mídia ou converter formato de imagem.
 ---
 
 # 🎬 iFood BEX — Ferramentas de GIF e Mídia
