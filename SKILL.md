@@ -27,10 +27,14 @@ Ferramentas práticas para o time de Comunicação do iFood (BEX) preparar mater
 
 Converte um vídeo (mp4, mov, etc.) em GIF otimizado para PowerPoint e Google Slides.
 
+> **✅ GIFs são gerados automaticamente dentro do limite de download da plataforma (abaixo de 5 MB).**  
+> O script detecta GIFs grandes e aplica compressão automática (gifsicle) ou redução de largura.  
+> Se o gifsicle não estiver instalado, o script instala automaticamente.
+
 ### Uso básico
 
 ```bash
-# Converter o vídeo inteiro (pode demorar — prefira recortar um trecho)
+# Converter o vídeo inteiro com preset padrão ppt (< 5 MB garantido)
 uv run --python 3.12 skills/ifood-bex-gifs-tools/scripts/video_to_gif.py meu_video.mp4
 
 # Converter apenas os primeiros 10 segundos (recomendado para slides)
@@ -43,23 +47,44 @@ uv run --python 3.12 skills/ifood-bex-gifs-tools/scripts/video_to_gif.py meu_vid
 uv run --python 3.12 skills/ifood-bex-gifs-tools/scripts/video_to_gif.py meu_video.mp4 --end 10 -o /tmp/meus_gifs/
 ```
 
-### Preset rápido (menos variantes, mais rápido)
+### Preset padrão: `ppt` — otimizado para download
+
+O novo preset padrão `ppt` foi projetado especificamente para garantir GIFs abaixo de 5 MB:
+
+- **FPS:** 10
+- **Largura:** 480 px
+- **Cores:** 128
+- **Compressão lossy:** nível 60 (via gifsicle)
+- **Verificação automática:** se o GIF ainda exceder 5 MB, compressão adicional e/ou redução para 360 px são aplicadas automaticamente
 
 ```bash
+# Usando o preset padrão ppt (recomendado para a plataforma)
+uv run --python 3.12 skills/ifood-bex-gifs-tools/scripts/video_to_gif.py meu_video.mp4 --presets ppt
+```
+
+### Outros presets disponíveis
+
+```bash
+# Comparação de 4 variantes rápidas
 uv run --python 3.12 skills/ifood-bex-gifs-tools/scripts/video_to_gif.py meu_video.mp4 \
   --presets minimal --end 10 -o /tmp/gifs/
 ```
 
-### Parâmetros ideais para PowerPoint
-
-Para slides, o GIF ideal é **640px de largura, 15fps, 256 cores** — esse é o padrão do preset `minimal`. Gera variantes para você escolher o melhor equilíbrio entre qualidade e tamanho.
-
 | Preset | Para que serve |
 |--------|---------------|
-| `minimal` | 4 variantes rápidas — ótimo para slides |
+| **`ppt`** | **Padrão — 1 variante leve (< 5 MB), pronta para download** |
+| `minimal` | 4 variantes rápidas — bom para slides |
 | `full` | 18 variantes — comparação completa |
 | `quality` | Foco em resolução alta |
 | `lossy` | Foco em tamanho mínimo |
+
+### Desativar o limite automático
+
+```bash
+# Caso você precise de GIFs maiores (ex: uso local, sem limite de download)
+uv run --python 3.12 skills/ifood-bex-gifs-tools/scripts/video_to_gif.py meu_video.mp4 \
+  --presets full --no-size-limit
+```
 
 ---
 
@@ -84,8 +109,6 @@ python3 skills/ifood-bex-gifs-tools/scripts/compress_video.py meu_video.mp4 --cr
 ```
 
 ### O que esperar
-
-O script mostra o tamanho antes e depois:
 
 ```
 📹 Arquivo original: meu_video.mp4
@@ -145,22 +168,6 @@ python3 skills/ifood-bex-gifs-tools/scripts/image_tools.py *.jpg --compress
 python3 skills/ifood-bex-gifs-tools/scripts/image_tools.py foto.jpg --compress -o /tmp/foto_menor.jpg
 ```
 
-### O que esperar
-
-```
-🖼️  Processando 3 arquivo(s)...
-
-  ✅ Comprimida: foto1.jpg → foto1_compressed.jpg
-     2.4 MB → 480 KB  (−80.2%)
-  ✅ Comprimida: foto2.jpg → foto2_compressed.jpg
-     1.8 MB → 350 KB  (−80.6%)
-  ✅ Comprimida: foto3.jpg → foto3_compressed.jpg
-     3.1 MB → 600 KB  (−80.6%)
-
-✅ Concluído: 3 arquivo(s) processado(s)!
-📊 Total: 7.3 MB → 1.4 MB  (−80.5%)
-```
-
 ### Guia de qualidade para imagens
 
 | Qualidade | Quando usar |
@@ -176,7 +183,8 @@ python3 skills/ifood-bex-gifs-tools/scripts/image_tools.py foto.jpg --compress -
 
 | O que quero fazer | Comando |
 |---|---|
-| Vídeo → GIF (10 seg) | `uv run --python 3.12 skills/ifood-bex-gifs-tools/scripts/video_to_gif.py video.mp4 --presets minimal --end 10` |
+| Vídeo → GIF (padrão < 5 MB) | `uv run --python 3.12 skills/ifood-bex-gifs-tools/scripts/video_to_gif.py video.mp4` |
+| Vídeo → GIF (10 seg) | `uv run --python 3.12 skills/ifood-bex-gifs-tools/scripts/video_to_gif.py video.mp4 --end 10` |
 | Vídeo → GIF (trecho) | `uv run --python 3.12 skills/ifood-bex-gifs-tools/scripts/video_to_gif.py video.mp4 --start 5 --end 15` |
 | Comprimir vídeo | `python3 skills/ifood-bex-gifs-tools/scripts/compress_video.py video.mp4` |
 | Comprimir vídeo (saída específica) | `python3 skills/ifood-bex-gifs-tools/scripts/compress_video.py video.mp4 -o saida.mp4` |
@@ -191,7 +199,7 @@ python3 skills/ifood-bex-gifs-tools/scripts/image_tools.py foto.jpg --compress -
 
 ### GIFs em apresentações
 
-- **Tamanho ideal:** 640px de largura, 15fps — funciona bem em telas Full HD
+- **Tamanho ideal:** 480px de largura, 10fps — GIFs leves e prontos para download
 - **Duração recomendada:** até 10-15 segundos (GIFs muito longos ficam pesados)
 - **Transparência:** GIFs não suportam fundo transparente — use fundo branco ou da cor do slide
 - **Como inserir no PowerPoint:** Inserir → Imagens → selecionar o `.gif`
@@ -234,3 +242,5 @@ sudo apt-get install -y ffmpeg
 # macOS
 brew install ffmpeg
 ```
+
+O `gifsicle` é instalado automaticamente pelo script quando necessário.

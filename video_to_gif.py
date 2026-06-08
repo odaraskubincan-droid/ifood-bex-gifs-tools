@@ -5,7 +5,12 @@ Convert a video file to multiple GIF variants with different quality/size tradeo
 Generates a matrix of GIFs varying FPS, width, and color count so the user can
 visually pick the best one. Optionally trims a time range from the source video.
 
-Prerequisites: FFmpeg, gifsicle (optional, for lossy compression variants)
+The default preset (`ppt`) targets GIFs below 5 MB, suitable for downloading
+from the ToqanClaw platform and inserting into PowerPoint / Google Slides.
+An automatic size-enforcement step compresses or downscales any GIF that
+exceeds the 5 MB limit.
+
+Prerequisites: FFmpeg, gifsicle (optional, installed automatically if needed)
 
 Usage:
     python video_to_gif.py input.mp4
@@ -23,6 +28,9 @@ import subprocess
 import sys
 from dataclasses import dataclass
 from pathlib import Path
+
+# Maximum GIF size in bytes before automatic compression kicks in (5 MB)
+MAX_GIF_BYTES = 5 * 1024 * 1024
 
 
 @dataclass
@@ -43,8 +51,16 @@ class GifConfig:
         return "_".join(parts)
 
 
-# Preset configurations targeting different tradeoff points
+# Preset configurations targeting different tradeoff points.
+# `ppt` is the new default — optimised for download (< 5 MB) and slides.
 PRESETS = {
+    "ppt": {
+        "fps": [10],
+        "width": [480],
+        "colors": [128],
+        "lossy": [60],
+        "dither": ["sierra2_4a"],
+    },
     "full": {
         "fps": [10, 15, 20],
         "width": [480, 640, 800],
@@ -76,6 +92,35 @@ PRESETS = {
 }
 
 
+def ensure_gifsicle() -> bool:
+    """Return True if gifsicle is available, installing it if necessary."""
+    if shutil.which("gifsicle"):
+        return True
+    print("  gifsicle not found — installing via apt-get...", flush=True)
+    result = subprocess.run(
+        ["apt-get", "install", "-y", "gifsicle"],
+        capture_output=True,
+        text=True,
+    )
+    if result.returncode == 0 and shutil.which("gifsicle"):
+        print("  gifsicle installed successfully.", flush=True)
+        return True
+    print("  Warning: could not install gifsicle — size enforcement may be limited.",
+          flush=True)
+    return False
+
+
+def compress_with_gifsicle(gif_path: str, lossy: int = 60) -> None:
+    """Compress gif_path in-place using gifsicle."""
+    tmp = gif_path + ".gsicle.tmp.gif"
+    subprocess.run(
+        ["gifsicle", "--optimize=3", f"--lossy={lossy}", gif_path, "-o", tmp],
+        capture_output=True,
+        check=True,
+    )
+    os.replace(tmp, gif_path)
+
+
 def get_video_info(input_file: str) -> dict:
     """Get video duration, width, height via ffprobe."""
     cmd = [
@@ -93,16 +138,18 @@ def get_video_info(input_file: str) -> dict:
     }
 
 
-def generate_gif(
+def _ffmpeg_gif(
     input_file: str,
     output_file: str,
-    config: GifConfig,
-    start: float | None = None,
-    end: float | None = None,
-) -> dict:
-    """Generate a single GIF with the given config. Returns metadata dict."""
-    # Build time trim args
-    time_args = []
+    width: int,
+    fps: int,
+    colors: int,
+    dither: str,
+    start: float | None,
+    end: float | None,
+) -> None:
+    """Two-pass palette-based GIF generation."""
+    time_args: list[str] = []
     if start is not None:
         time_args += ["-ss", str(start)]
     if end is not None:
@@ -111,13 +158,11 @@ def generate_gif(
         else:
             time_args += ["-t", str(end)]
 
-    # Two-pass palette-based GIF generation for best quality
     palette_file = output_file + ".palette.png"
 
-    # Pass 1: generate palette
     palette_filter = (
-        f"fps={config.fps},scale={config.width}:-1:flags=lanczos,"
-        f"palettegen=max_colors={config.colors}:stats_mode=diff"
+        f"fps={fps},scale={width}:-1:flags=lanczos,"
+        f"palettegen=max_colors={colors}:stats_mode=diff"
     )
     cmd_palette = (
         ["ffmpeg", "-y"] + time_args +
@@ -125,10 +170,9 @@ def generate_gif(
     )
     subprocess.run(cmd_palette, capture_output=True, check=True)
 
-    # Pass 2: apply palette
     gif_filter = (
-        f"fps={config.fps},scale={config.width}:-1:flags=lanczos"
-        f"[x];[x][1:v]paletteuse=dither={config.dither}"
+        f"fps={fps},scale={width}:-1:flags=lanczos"
+        f"[x];[x][1:v]paletteuse=dither={dither}"
     )
     cmd_gif = (
         ["ffmpeg", "-y"] + time_args +
@@ -136,20 +180,94 @@ def generate_gif(
          "-filter_complex", gif_filter, output_file]
     )
     subprocess.run(cmd_gif, capture_output=True, check=True)
-
-    # Clean up palette
     os.remove(palette_file)
+
+
+def enforce_size_limit(
+    gif_path: str,
+    input_file: str,
+    config: "GifConfig",
+    start: float | None,
+    end: float | None,
+    limit: int = MAX_GIF_BYTES,
+) -> None:
+    """
+    If gif_path exceeds `limit` bytes, attempt to bring it under the limit:
+      1. Apply gifsicle lossy compression (level 80).
+      2. If still too large, regenerate at 360 px width with gifsicle.
+    Prints a warning for each step taken.
+    """
+    size = os.path.getsize(gif_path)
+    if size <= limit:
+        return
+
+    mb = size / (1024 * 1024)
+    print(f"\n  ⚠️  GIF is {mb:.2f} MB — exceeds {limit // (1024*1024)} MB limit. "
+          f"Applying automatic compression...", flush=True)
+
+    # Step 1 — gifsicle lossy compression
+    has_gifsicle = ensure_gifsicle()
+    if has_gifsicle:
+        compress_with_gifsicle(gif_path, lossy=80)
+        size = os.path.getsize(gif_path)
+        mb = size / (1024 * 1024)
+        print(f"  → After gifsicle compression: {mb:.2f} MB", flush=True)
+
+    if size <= limit:
+        return
+
+    # Step 2 — re-generate at 360 px width
+    print(f"  → Still {mb:.2f} MB — regenerating at 360 px width...", flush=True)
+    _ffmpeg_gif(
+        input_file, gif_path,
+        width=360,
+        fps=config.fps,
+        colors=min(config.colors, 128),
+        dither=config.dither,
+        start=start,
+        end=end,
+    )
+    if has_gifsicle:
+        compress_with_gifsicle(gif_path, lossy=80)
+
+    size = os.path.getsize(gif_path)
+    mb = size / (1024 * 1024)
+    print(f"  → Final size after fallback: {mb:.2f} MB", flush=True)
+    if size > limit:
+        print(f"  ⚠️  Could not reduce below {limit // (1024*1024)} MB. "
+              f"Consider trimming the video (--start / --end).", flush=True)
+
+
+def generate_gif(
+    input_file: str,
+    output_file: str,
+    config: "GifConfig",
+    start: float | None = None,
+    end: float | None = None,
+    enforce_limit: bool = True,
+) -> dict:
+    """Generate a single GIF with the given config. Returns metadata dict."""
+    _ffmpeg_gif(
+        input_file, output_file,
+        width=config.width,
+        fps=config.fps,
+        colors=config.colors,
+        dither=config.dither,
+        start=start,
+        end=end,
+    )
 
     # Optional lossy compression with gifsicle
     if config.lossy > 0 and shutil.which("gifsicle"):
-        lossy_file = output_file + ".tmp.gif"
-        cmd_lossy = [
-            "gifsicle", "--optimize=3",
-            f"--lossy={config.lossy}",
-            output_file, "-o", lossy_file,
-        ]
-        subprocess.run(cmd_lossy, capture_output=True, check=True)
-        os.replace(lossy_file, output_file)
+        compress_with_gifsicle(output_file, lossy=config.lossy)
+    elif config.lossy > 0:
+        # Try to install and use gifsicle for the requested lossy level
+        if ensure_gifsicle():
+            compress_with_gifsicle(output_file, lossy=config.lossy)
+
+    # Automatic size enforcement
+    if enforce_limit:
+        enforce_size_limit(output_file, input_file, config, start, end)
 
     size_bytes = os.path.getsize(output_file)
     return {
@@ -179,7 +297,10 @@ def build_configs(preset_name: str) -> list[GifConfig]:
 
 def main():
     parser = argparse.ArgumentParser(
-        description="Convert video to multiple GIF variants for visual comparison."
+        description=(
+            "Convert video to GIF. Default preset 'ppt' generates a single "
+            "download-safe GIF (< 5 MB) optimised for PowerPoint and Google Slides."
+        )
     )
     parser.add_argument("input", help="Input video file path")
     parser.add_argument("-o", "--output-dir",
@@ -188,9 +309,9 @@ def main():
                         help="Start time in seconds")
     parser.add_argument("--end", type=float, default=None,
                         help="End time in seconds")
-    parser.add_argument("--presets", default="full",
+    parser.add_argument("--presets", default="ppt",
                         choices=list(PRESETS.keys()),
-                        help="Preset config set (default: full)")
+                        help="Preset config set (default: ppt)")
     # Allow overriding individual axes
     parser.add_argument("--fps", type=int, nargs="+",
                         help="Override FPS values (e.g., --fps 10 15 20)")
@@ -200,6 +321,8 @@ def main():
                         help="Override color counts (e.g., --colors 128 256)")
     parser.add_argument("--lossy", type=int, nargs="+",
                         help="Gifsicle lossy levels (e.g., --lossy 0 30 80)")
+    parser.add_argument("--no-size-limit", action="store_true",
+                        help="Skip the automatic 5 MB size enforcement")
 
     args = parser.parse_args()
 
@@ -258,16 +381,18 @@ def main():
         print("Error: no valid configurations (all widths exceed source resolution)")
         sys.exit(1)
 
-    print(f"Generating {len(configs)} GIF variants (preset: {args.presets})...")
+    enforce_limit = not args.no_size_limit
+    print(f"Generating {len(configs)} GIF variant(s) (preset: {args.presets})...")
     print(f"Output directory: {out_dir}")
+    if enforce_limit:
+        limit_mb = MAX_GIF_BYTES // (1024 * 1024)
+        print(f"Size limit: {limit_mb} MB (automatic compression enabled)")
     print()
 
-    # Check for gifsicle if lossy configs exist
-    has_gifsicle = shutil.which("gifsicle") is not None
+    # Pre-check gifsicle for presets that request lossy compression
     lossy_configs = [c for c in configs if c.lossy > 0]
-    if lossy_configs and not has_gifsicle:
-        print("Warning: gifsicle not found, skipping lossy compression variants")
-        configs = [c for c in configs if c.lossy == 0]
+    if lossy_configs and not shutil.which("gifsicle"):
+        ensure_gifsicle()
 
     results = []
     for i, config in enumerate(configs, 1):
@@ -275,9 +400,11 @@ def main():
         print(f"  [{i}/{len(configs)}] {config.label}...", end=" ", flush=True)
         try:
             meta = generate_gif(input_file, output_file, config,
-                                start=args.start, end=args.end)
+                                start=args.start, end=args.end,
+                                enforce_limit=enforce_limit)
             results.append(meta)
-            print(f"{meta['size_kb']:.0f} KB ({meta['size_mb']:.2f} MB)")
+            over = " ⚠️ >5MB" if meta["size_mb"] > 5 else ""
+            print(f"{meta['size_kb']:.0f} KB ({meta['size_mb']:.2f} MB){over}")
         except subprocess.CalledProcessError as e:
             print(f"FAILED: {e}")
 
@@ -297,18 +424,21 @@ def main():
         else:
             size_str = f"{r['size_kb']:.0f} KB"
         lossy_str = f" L{r['lossy']}" if r["lossy"] > 0 else ""
+        over_str = " ⚠️" if r["size_mb"] > 5 else ""
         print(f"{fname:<40} {size_str:>10} {r['fps']:>5} {r['width']:>6} "
-              f"{r['colors']:>5}{lossy_str}")
+              f"{r['colors']:>5}{lossy_str}{over_str}")
 
     print()
-    print(f"Total: {len(results)} GIFs in {out_dir}/")
-    smallest = results[0]
-    largest = results[-1]
-    print(f"Smallest: {os.path.basename(smallest['file'])} "
-          f"({smallest['size_kb']:.0f} KB)")
-    print(f"Largest:  {os.path.basename(largest['file'])} "
-          f"({largest['size_kb']:.0f} KB)")
+    print(f"Total: {len(results)} GIF(s) in {out_dir}/")
+    if results:
+        smallest = results[0]
+        largest = results[-1]
+        print(f"Smallest: {os.path.basename(smallest['file'])} "
+              f"({smallest['size_kb']:.0f} KB)")
+        print(f"Largest:  {os.path.basename(largest['file'])} "
+              f"({largest['size_kb']:.0f} KB)")
     print()
+    print("GIFs are automatically kept within the platform download limit (< 5 MB).")
     print("Pick the one that balances size and visual quality for your use case.")
 
 
